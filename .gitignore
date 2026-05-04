@@ -1,0 +1,15 @@
+# R / RStudio
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+
+# Data (zu gross fuer Git)
+data/reference/*.fna
+data/reference/*.fna.gz
+data/reference/*.ht2
+data/bam/*.bam
+data/bam/*.bai
+
+# Ergebnisse
+results/
