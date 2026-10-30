@@ -20,9 +20,28 @@
 # 0. SETUP — Pakete & Konfiguration
 # ============================================================================
 
+source(file.path("R", "pipeline_helpers.R"))
+
+input_fastq <- Sys.getenv("FASTQ2BAM_FASTQ")
+input_reference <- Sys.getenv("FASTQ2BAM_REFERENCE")
+if (xor(nzchar(input_fastq), nzchar(input_reference))) {
+  stop("FASTQ2BAM_FASTQ und FASTQ2BAM_REFERENCE müssen gemeinsam angegeben werden.")
+}
+synthetic_demo <- !nzchar(input_fastq)
+if (!synthetic_demo) {
+  input_fastq <- normalizePath(input_fastq, mustWork = TRUE)
+  input_reference <- normalizePath(input_reference, mustWork = TRUE)
+  .require_output(input_fastq)
+  .require_output(input_reference)
+}
+
+
 # --- Hilfsfunktion: Paket laden, ggf. installieren --------------------------
 .ensure_pkg <- function(pkg, bioc = FALSE) {
   if (!requireNamespace(pkg, quietly = TRUE)) {
+    if (Sys.getenv("FASTQ2BAM_INSTALL_PACKAGES") != "1") {
+      stop("Paket fehlt: ", pkg, ". Installation siehe README.md; keine automatische Änderung der R-Bibliothek.")
+    }
     if (bioc) {
       if (!requireNamespace("BiocManager", quietly = TRUE))
         install.packages("BiocManager")
@@ -79,54 +98,61 @@ message("")
 
 # --- Projektpfade -----------------------------------------------------------
 PROJECT_DIR <- getwd()  # Aktuelles Arbeitsverzeichnis = Projektordner
+RUN_DIR <- Sys.getenv("FASTQ2BAM_RUN_DIR", unset = tempfile("run-", file.path(PROJECT_DIR, "results")))
+.require_fresh_directory(RUN_DIR)
 
 PATHS <- list(
-  fastq     = file.path(PROJECT_DIR, "data", "fastq"),
-  reference = file.path(PROJECT_DIR, "data", "reference"),
-  bam       = file.path(PROJECT_DIR, "data", "bam"),
-  qc        = file.path(PROJECT_DIR, "results", "qc"),
-  alignment = file.path(PROJECT_DIR, "results", "alignment"),
-  scripts   = file.path(PROJECT_DIR, "scripts")
+  fastq     = file.path(RUN_DIR, "fastq"),
+  reference = file.path(RUN_DIR, "reference"),
+  bam       = file.path(RUN_DIR, "bam"),
+  qc        = file.path(RUN_DIR, "qc"),
+  alignment = file.path(RUN_DIR, "alignment"),
+  provenance = file.path(RUN_DIR, "provenance")
 )
 
 # Ordner erstellen
 invisible(lapply(PATHS, dir.create, recursive = TRUE, showWarnings = FALSE))
 
 # --- Parameter --------------------------------------------------------------
-THREADS  <- 4L      # Anzahl CPU-Threads
-ALIGNER  <- "auto"  # "hisat2", "rsubread", oder "auto"
+THREADS  <- 1L      # Gemeinsamer Arbeitsplatz: ein Thread
+ALIGNER <- match.arg(Sys.getenv("FASTQ2BAM_ALIGNER", unset = "auto"), c("auto", "hisat2", "rsubread"))
+
+ALIGNMENT_TYPE <- match.arg(Sys.getenv("FASTQ2BAM_TYPE", unset = "dna"), c("dna", "rna"))
 
 message("=== Projekt-Konfiguration ===")
 message("Projektverzeichnis: ", PROJECT_DIR)
 message("Threads:            ", THREADS)
 message("Aligner:            ", ALIGNER)
+message("Datentyp:           ", ALIGNMENT_TYPE)
 message("")
 
 
 # ============================================================================
-# 2. BEISPIEL-FASTQ HERUNTERLADEN
+# 2. SYNTHETISCHE DEMODATEN ODER EIGENE EINGABEN
 # ============================================================================
 
 message("=== Schritt 2: FASTQ-Daten bereitstellen ===")
 
-# Wir verwenden die ShortRead-Beispieldaten (immer verfuegbar nach Installation)
-fastq_source <- system.file("extdata", "E-MTAB-1147", package = "ShortRead")
-fastq_files  <- list.files(fastq_source, pattern = "\\.fastq\\.gz$",
-                           full.names = TRUE)
-
-if (length(fastq_files) == 0) {
-  stop("Keine FASTQ-Dateien im ShortRead-Paket gefunden.")
+if (synthetic_demo) {
+  demo <- .create_demo(PATHS$fastq, PATHS$reference)
+  fastq_files <- demo$fastq
+  ref_fa <- demo$reference
+  writeLines("Synthetic software fixture: seed 42, 100 exact single-end reads of 75 bases. No biological sample.",
+             file.path(PATHS$provenance, "INPUT.md"))
+} else {
+  fastq_files <- file.path(PATHS$fastq, basename(input_fastq))
+  ref_fa <- file.path(PATHS$reference, basename(input_reference))
+  if (!file.copy(input_fastq, fastq_files) || !file.copy(input_reference, ref_fa)) {
+    stop("Eingaben konnten nicht kopiert werden; Originale bleiben unverändert.")
+  }
+  writeLines(c("User-supplied single-end FASTQ and uncompressed reference FASTA.",
+               paste("FASTQ:", input_fastq), paste("Reference:", input_reference),
+               "Organism, assembly and alignment settings require domain review."),
+             file.path(PATHS$provenance, "INPUT.md"))
 }
-
-# Dateien ins Projektverzeichnis kopieren
-for (f in fastq_files) {
-  dest <- file.path(PATHS$fastq, basename(f))
-  if (!file.exists(dest)) file.copy(f, dest)
-}
-
-# Arbeitskopien verwenden
-fastq_files <- list.files(PATHS$fastq, pattern = "\\.fastq\\.gz$",
-                          full.names = TRUE)
+write.table(data.frame(path = c(fastq_files, ref_fa),
+                       md5 = unname(tools::md5sum(c(fastq_files, ref_fa)))),
+            file.path(PATHS$provenance, "inputs.tsv"), sep = "\t", row.names = FALSE, quote = TRUE)
 
 message("FASTQ-Dateien (", length(fastq_files), "):")
 invisible(lapply(fastq_files, function(f) {
@@ -146,6 +172,7 @@ library(ShortRead)
 
 # Erste Datei einlesen
 reads <- readFastq(fastq_files[1])
+if (!length(reads)) stop("FASTQ-Datei enthält keine Reads.")
 
 message("Datei:         ", basename(fastq_files[1]))
 message("Anzahl Reads:  ", length(reads))
@@ -158,7 +185,7 @@ message("Mittl. Qualitaet: ", round(mean_qual, 1), " (Phred)")
 
 # Erste 3 Reads zeigen
 message("\nErste 3 Sequenzen:")
-print(sread(reads)[1:3])
+print(sread(reads)[seq_len(min(3L, length(reads)))])
 
 message("")
 
@@ -180,7 +207,8 @@ message("ShortRead QC-Report: ", PATHS$qc)
 
 # --- 4b: Qualitaet pro Zyklus plotten ---------------------------------------
 n_sample <- min(2000L, nrow(qual_matrix))
-sampled  <- qual_matrix[sample(nrow(qual_matrix), n_sample), ]
+set.seed(1)
+sampled  <- qual_matrix[sample(nrow(qual_matrix), n_sample), , drop = FALSE]
 
 qual_df <- data.frame(
   cycle   = rep(seq_len(ncol(sampled)), each = n_sample),
@@ -219,8 +247,7 @@ message("Plot gespeichert: gc_content.pdf")
 
 # --- 4d: FastQC (wenn verfuegbar) -------------------------------------------
 if (has_fastqc) {
-  cmd <- paste("fastqc", fastq_files[1], "-o", PATHS$qc, "-t", THREADS)
-  system(cmd, ignore.stdout = TRUE, ignore.stderr = TRUE)
+  .run_tool("fastqc", c(fastq_files[1], "-o", PATHS$qc, "-t", THREADS))
   message("FastQC-Report erstellt.")
 }
 
@@ -231,46 +258,31 @@ message("")
 # 5. REFERENZGENOM VORBEREITEN
 # ============================================================================
 
-message("=== Schritt 5: Referenzgenom herunterladen & Index bauen ===")
-
-# E. coli K-12 MG1655 (klein, ~5 MB — ideal zum Testen)
-ref_url <- paste0(
-  "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/005/845/",
-  "GCF_000005845.2_ASM584v2/GCF_000005845.2_ASM584v2_genomic.fna.gz"
-)
-ref_gz <- file.path(PATHS$reference, "ecoli_k12.fna.gz")
-ref_fa <- file.path(PATHS$reference, "ecoli_k12.fna")
-
-if (!file.exists(ref_fa)) {
-  message("Lade E. coli K-12 Referenzgenom herunter...")
-  download.file(ref_url, ref_gz, mode = "wb", quiet = TRUE)
-  R.utils::gunzip(ref_gz, destname = ref_fa, remove = FALSE, overwrite = TRUE)
-  message("Referenzgenom: ", ref_fa)
-}
+message("=== Schritt 5: Index der ausgewählten Referenz bauen ===")
+.require_output(ref_fa)
 
 # --- Index bauen ------------------------------------------------------------
-index_prefix <- file.path(PATHS$reference, "ecoli_k12_idx")
+index_prefix <- file.path(PATHS$reference, "reference_idx")
 
 use_rsubread <- FALSE
 
 if (has_hisat2 && (ALIGNER %in% c("hisat2", "auto"))) {
   # HISAT2-Index
-  idx_files <- list.files(PATHS$reference, pattern = "ecoli_k12_idx.*\\.ht2$")
-  if (length(idx_files) == 0) {
+  if (!.hisat_index_complete(index_prefix)) {
     message("Baue HISAT2-Index...")
-    cmd <- paste("hisat2-build -q", ref_fa, index_prefix)
-    system(cmd, ignore.stdout = TRUE)
+    .run_tool("hisat2-build", c("-q", ref_fa, index_prefix))
+    if (!.hisat_index_complete(index_prefix)) stop("HISAT2-Index ist unvollständig.")
     message("HISAT2-Index fertig.")
   } else {
     message("HISAT2-Index bereits vorhanden.")
   }
-} else if (has_rsubread) {
+} else if (has_rsubread && ALIGNER %in% c("rsubread", "auto")) {
   use_rsubread <- TRUE
-  rsubread_idx <- file.path(PATHS$reference, "ecoli_k12_rsubread")
-  idx_files <- list.files(PATHS$reference, pattern = "ecoli_k12_rsubread")
-  if (length(idx_files) == 0) {
+  rsubread_idx <- file.path(PATHS$reference, "reference_rsubread")
+  if (!.rsubread_index_complete(rsubread_idx)) {
     message("Baue Rsubread-Index...")
     Rsubread::buildindex(basename = rsubread_idx, reference = ref_fa)
+    if (!.rsubread_index_complete(rsubread_idx)) stop("Rsubread-Index ist unvollständig; Indexprotokoll prüfen.")
     message("Rsubread-Index fertig.")
   }
 } else {
@@ -294,18 +306,18 @@ if (!use_rsubread) {
   message("Aligner: HISAT2")
   summary_file <- file.path(PATHS$alignment, "hisat2_summary.txt")
 
-  hisat2_cmd <- paste(
-    "hisat2",
+  hisat2_args <- c(
     "-x", index_prefix,
     "-U", fastq_files[1],
     "-S", sam_file,
     "--threads", THREADS,
-    "--summary-file", summary_file,
-    "--no-unal"                         # Unalignierte Reads nicht ausgeben
+    "--summary-file", summary_file
   )
 
+  if (ALIGNMENT_TYPE == "dna") hisat2_args <- c(hisat2_args, "--no-spliced-alignment")
   t0 <- Sys.time()
-  exit_code <- system(hisat2_cmd)
+  exit_code <- .run_tool("hisat2", hisat2_args)
+  .require_output(sam_file)
   dt <- difftime(Sys.time(), t0, units = "secs")
 
   if (exit_code == 0) {
@@ -327,10 +339,12 @@ if (!use_rsubread) {
 
   t0 <- Sys.time()
   Rsubread::align(
-    index      = file.path(PATHS$reference, "ecoli_k12_rsubread"),
+    index      = file.path(PATHS$reference, "reference_rsubread"),
     readfile1  = fastq_files[1],
     output_file = paste0(bam_rsubread, ".BAM"),
-    nthreads   = THREADS
+    nthreads   = THREADS,
+    type       = if (ALIGNMENT_TYPE == "dna") 0L else 1L,
+    phredOffset = 33L
   )
   dt <- difftime(Sys.time(), t0, units = "secs")
 
@@ -338,6 +352,7 @@ if (!use_rsubread) {
 
   # Rsubread erzeugt direkt BAM
   bam_raw <- paste0(bam_rsubread, ".BAM")
+  .require_output(bam_raw)
   sam_file <- NULL  # Kein SAM bei Rsubread
 }
 
@@ -357,33 +372,34 @@ if (!is.null(sam_file) && file.exists(sam_file)) {
   # SAM → BAM
   if (has_samtools) {
     message("Konvertiere SAM -> BAM...")
-    system(paste("samtools view -bS -@", THREADS, sam_file, ">", bam_raw))
+    .run_tool("samtools", c("view", "-bS", "-@", THREADS, "-o", bam_raw, sam_file))
+    .require_output(bam_raw)
 
     message("Sortiere BAM...")
-    system(paste("samtools sort -@", THREADS, bam_raw, "-o", bam_sorted))
+    .run_tool("samtools", c("sort", "-@", THREADS, bam_raw, "-o", bam_sorted))
+    .require_output(bam_sorted)
 
     message("Indexiere BAM...")
-    system(paste("samtools index", bam_sorted))
-
-    # Aufraumen: SAM und unsortierte BAM loeschen
-    unlink(sam_file)
-    unlink(bam_raw)
+    .run_tool("samtools", c("quickcheck", "-v", bam_sorted))
+    .run_tool("samtools", c("index", bam_sorted))
+    .require_output(bam_index)
+    # Eingaben und Zwischenstände bleiben zur Fehleranalyse erhalten.
 
     message("SAM/BAM-Verarbeitung fertig (samtools).")
 
   } else if (requireNamespace("Rsamtools", quietly = TRUE)) {
     message("Verwende Rsamtools fuer SAM -> BAM...")
-    # Manuell: samtools nicht vorhanden, aber Rsamtools kann sortieren/indexieren
-    # Rsamtools braucht aber eine BAM-Datei als Input
-    message("[WARNUNG] Ohne samtools kann SAM nicht direkt konvertiert werden.")
-    message("          Bitte samtools installieren.")
+    Rsamtools::asBam(sam_file, destination = sub("\\.bam$", "", bam_raw), overwrite = FALSE)
+    Rsamtools::sortBam(bam_raw, destination = sub("\\.bam$", "", bam_sorted))
+    Rsamtools::indexBam(bam_sorted)
   }
 
 } else if (file.exists(bam_raw)) {
   # Rsubread hat direkt BAM erzeugt → sortieren & indexieren
   if (has_samtools) {
-    system(paste("samtools sort -@", THREADS, bam_raw, "-o", bam_sorted))
-    system(paste("samtools index", bam_sorted))
+    .run_tool("samtools", c("sort", "-@", THREADS, bam_raw, "-o", bam_sorted))
+    .run_tool("samtools", c("quickcheck", "-v", bam_sorted))
+    .run_tool("samtools", c("index", bam_sorted))
   } else {
     library(Rsamtools)
     sortBam(bam_raw, destination = sub("\\.bam$", "", bam_sorted))
@@ -392,10 +408,13 @@ if (!is.null(sam_file) && file.exists(sam_file)) {
   message("BAM sortiert & indexiert.")
 }
 
+.require_output(bam_sorted)
+.require_output(bam_index)
+
 # --- Statistiken ------------------------------------------------------------
 if (has_samtools && file.exists(bam_sorted)) {
   message("\nBAM-Statistiken (samtools flagstat):")
-  system(paste("samtools flagstat", bam_sorted))
+  .run_tool("samtools", c("flagstat", bam_sorted))
 }
 
 message("")
@@ -462,8 +481,20 @@ if (file.exists(bam_sorted)) {
   library(ggplot2)
 
   # Alignments einlesen (mapq muss explizit angefordert werden)
-  ga <- readGAlignments(bam_sorted, param = ScanBamParam(what = "mapq"))
+  ga <- readGAlignments(bam_sorted, use.names = TRUE, param = ScanBamParam(what = "mapq"))
   message("Alignierte Reads: ", length(ga))
+  if (!length(ga)) stop("Keine Reads aligniert. Eingaben und Referenz prüfen; keine erfolgreiche Analyse.")
+  if (synthetic_demo) {
+    observed <- match(demo$truth$read_id, names(ga))
+    if (length(ga) != nrow(demo$truth) || anyNA(observed) ||
+        any(as.character(seqnames(ga))[observed] != demo$truth$reference) ||
+        any(start(ga)[observed] != demo$truth$position) || any(width(ga)[observed] != 75L) ||
+        any(as.character(strand(ga))[observed] != "+")) {
+      stop("Synthetischer Alignment-Test stimmt nicht mit bekannten Positionen überein.")
+    }
+    writeLines("PASS: all 100 synthetic reads align at their known reference positions.",
+               file.path(PATHS$provenance, "synthetic-validation.txt"))
+  }
 
   # Coverage berechnen
   cov <- coverage(ga)

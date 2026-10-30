@@ -1,0 +1,31 @@
+name: Synthetic alignment
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  demo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      OMP_NUM_THREADS: '1'
+      FASTQ2BAM_ALIGNER: rsubread
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: r-lib/actions/setup-r@f9a764fea8d5c63df6ef9a5c7795bf7deb5d7e05
+        with:
+          r-version: '4.6.1'
+          use-public-rspm: true
+      - name: Dependencies
+        shell: Rscript {0}
+        run: |
+          install.packages(c("BiocManager", "data.table", "ggplot2", "R.utils"))
+          BiocManager::install(version="3.23", ask=FALSE)
+          BiocManager::install(c("ShortRead", "Rsamtools", "GenomicAlignments", "Biostrings", "BiocParallel", "Rsubread"), ask=FALSE, update=FALSE)
+      - run: Rscript --vanilla tests/test_commands.R
+      - run: Rscript --vanilla tests/test_demo.R
+      - run: Rscript --vanilla 00_fastq_to_bam_pipeline.R
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: synthetic-results
+          path: results/
