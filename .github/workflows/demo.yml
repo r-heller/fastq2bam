@@ -15,12 +15,19 @@ jobs:
         with:
           r-version: '4.6.1'
           use-public-rspm: true
+      - name: Install alignment system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev libssl-dev libbz2-dev liblzma-dev zlib1g-dev
       - name: Dependencies
         shell: Rscript {0}
         run: |
           install.packages(c("BiocManager", "data.table", "ggplot2", "R.utils"))
           BiocManager::install(version="3.23", ask=FALSE)
-          BiocManager::install(c("ShortRead", "Rsamtools", "GenomicAlignments", "Biostrings", "BiocParallel", "Rsubread"), ask=FALSE, update=FALSE)
+          packages <- c("ShortRead", "Rsamtools", "GenomicAlignments", "Biostrings", "BiocParallel", "Rsubread")
+          BiocManager::install(packages, ask=FALSE, update=FALSE)
+          missing <- packages[!vapply(packages, requireNamespace, logical(1), quietly=TRUE)]
+          if (length(missing)) stop("Missing alignment dependencies: ", paste(missing, collapse=", "))
       - run: Rscript --vanilla tests/test_commands.R
       - run: Rscript --vanilla tests/test_demo.R
       - run: Rscript --vanilla 00_fastq_to_bam_pipeline.R
