@@ -22,6 +22,11 @@ HISAT2 mit `hisat2-build` ist eine Alternative zu Rsubread. samtools und FastQC
 sind optional. Fehlende Pakete werden standardmäßig gemeldet, nicht stillschweigend
 installiert. Alle Rechenschritte verwenden einen Thread.
 
+Der Workflow prüft neben Rsubread auch HISAT2 mit samtools und FastQC im DNA-
+und RNA-Modus. Die Ausgabeordner enthalten dabei Leerzeichen und ein Apostroph.
+Diese zusammenhängenden synthetischen Reads prüfen keine Spleißstellen.
+FastQC verwendet die auch in Version 0.13 unterstützte Option `--outdir`.
+
 ## Demonstration ausführen
 
 Im Repository-Verzeichnis:
@@ -29,6 +34,7 @@ Im Repository-Verzeichnis:
 ```sh
 Rscript --vanilla tests/test_commands.R
 Rscript --vanilla tests/test_demo.R
+Rscript --vanilla tests/test_quality_report.R
 Rscript --vanilla 00_fastq_to_bam_pipeline.R
 ```
 
@@ -53,6 +59,15 @@ Die Schritte sind:
 Der Lauf schreibt die konkreten Ausgabepfade und `sessionInfo()` ins Protokoll.
 Das Beispiel belegt die Dateiverarbeitung, nicht die Genauigkeit eines Aligners
 bei Fehlern, Spleißstellen, Varianten oder biologischen Proben.
+
+Bei gleichen Häufigkeiten aller Qualitätsklassen kann die ShortRead-Heatmap
+statt Daten einen Grafikfehler ausgeben. Dann stellt der Bericht die vollständige
+Zähltabelle als Punkte dar; Zyklus, Qualität und Häufigkeit bleiben unverändert.
+Der Workflow prüft die PDFs zusätzlich auf diese gerenderte Fehlermeldung.
+FastQC-Modulergebnisse sind getrennt vom Exit-Code zu lesen: Das kleine
+synthetische Beispiel enthält Inhaltswarnungen und einen fehlgeschlagenen
+Basenzusammensetzungstest. Erfolgreiche Verarbeitung bedeutet keinen vollständigen
+Qualitätsnachweis.
 
 ## Eigene Daten verwenden
 
@@ -82,6 +97,12 @@ Laufordner wählen. Externe Befehle müssen Exit-Code 0 liefern; ihre Argumente
 werden getrennt und korrekt quotiert. Fehlende oder leere erwartete Dateien
 stoppen den Ablauf. Rsubread kann einen Indexfehler nur ins Log schreiben;
 deshalb wird zusätzlich die vollständige Indexausgabe geprüft.
+
+Der HISAT2-Wrapper setzt intern erneut Shell-Befehle zusammen. Deshalb verwendet
+das Alignment feste relative Namen über temporäre symbolische Verknüpfungen;
+große Eingaben werden dabei nicht erneut kopiert. Die Verknüpfungen werden auch
+bei Fehlern entfernt, während Eingaben und Alignment-Ausgaben erhalten bleiben.
+Dieser Werkzeugpfad benötigt Unterstützung für symbolische Verknüpfungen.
 
 Die tatsächlich beobachteten Ergebnisse und noch ungeprüften Werkzeugpfade stehen
 in [MAINTENANCE.md](MAINTENANCE.md).

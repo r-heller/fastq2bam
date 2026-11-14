@@ -20,6 +20,7 @@ From the repository root:
 ```sh
 Rscript --vanilla tests/test_commands.R
 Rscript --vanilla tests/test_demo.R
+Rscript --vanilla tests/test_quality_report.R
 Rscript --vanilla 00_fastq_to_bam_pipeline.R
 ```
 
@@ -34,6 +35,24 @@ the fixture is not a biological sample or an alignment-accuracy study.
 HISAT2 plus `hisat2-build` can replace Rsubread; samtools and FastQC are optional.
 `FASTQ2BAM_ALIGNER=auto` prefers HISAT2, then Rsubread. Select `hisat2` or `rsubread`
 explicitly when reproducing an analysis. All compute uses one thread.
+
+The synthetic alignment workflow exercises Rsubread and native HISAT2 with
+samtools and FastQC. HISAT2 runs in both DNA and RNA modes with spaces and an
+apostrophe in the output path. These contiguous reads check the command and BAM
+round trip; they do not test splice-junction detection. FastQC uses its supported
+`--outdir` option, including with FastQC 0.13.
+
+For equal quality-bin counts, ShortRead's heatmap can render an error panel.
+The report uses the complete count table as points in that case, keeping every
+cycle, quality score and count. CI also checks PDFs for this rendered error.
+Review FastQC's module results separately from its command exit status. The
+small synthetic fixture produces content warnings and a base-content failure;
+successful processing does not mean every quality module passes.
+
+HISAT2 alignment uses temporary symbolic links with fixed relative names because
+its wrapper reconstructs shell commands. The links avoid copying large inputs
+again and are removed on success or failure; inputs and alignment outputs remain
+in the run directory. The native path requires symbolic-link support.
 
 ## Your own data
 

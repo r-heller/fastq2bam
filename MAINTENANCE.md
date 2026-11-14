@@ -47,7 +47,7 @@ The successful run is ignored `results/run-13e456b01fe08/`; its provenance recei
 states the exact 100-read validation. Earlier failed attempts and logs are retained,
 not presented as successful results. The original `data/` files were not changed.
 
-## Roadmap and readiness
+## Roadmap and readiness recorded on 30 October
 
 Essential repairs and the local single-end synthetic first-use path are complete.
 The configured Linux CI has not run remotely. HISAT2, samtools and FastQC branches
@@ -61,3 +61,40 @@ large FASTQ files, statistical downstream analysis and a broader aligner compari
 are future milestones, outside this teaching release. README.md gives the exact
 current prerequisites and runnable commands. Next distribution action: review the
 candidate and run its Linux workflow on an authorized branch.
+
+## Native integration update — 14 November 2026
+
+Actual FastQC 0.13 rejected the old `-o` option. The pipeline now uses
+`--outdir`. Actual HISAT2 also failed when its internally reconstructed shell
+command encountered an apostrophe in a run path. Alignment now uses fixed
+relative names through temporary symbolic links, without copying the large
+inputs again. The working directory and links are cleaned up on success and
+failure; original inputs and partial alignment outputs remain intact.
+
+Native DNA and RNA-mode synthetic runs on macOS ARM64 completed QC, alignment,
+sorting, indexing and the exact 100-read truth comparison with FastQC 0.13 and
+samtools. HISAT2 was built from upstream commit
+`0d244324f98de541bce04d45c75e83bc3522f7f4` using its ARM support.
+The run paths contained spaces and an apostrophe. An independent 40-assertion
+filesystem probe checked small/large indexes, plain/gzip read aliases, retained
+input hashes, cleanup and injected alignment failures. The native CI step
+requires all tools and runs both modes; its hosted result is a separate gate.
+
+Visual inspection also found a silent ShortRead heatmap error: equal bin counts
+produce nonunique colour breaks. For that case only, the report now plots the
+complete original count table as points. Every cycle, score and count is
+preserved; the synthetic quality values are unchanged. Unit tests cover equal
+counts with multiple scores and samples, ordinary counts and an empty table.
+The corrected panel was rendered and inspected, and CI rejects the observed
+error text in generated PDFs.
+
+FastQC's actual synthetic-run summary retains one FAIL (per-base sequence
+content) and two WARN modules (per-sequence GC and overrepresented sequences).
+Other modules pass. Successful execution and exact alignment are separate from
+those diagnostic quality judgements; no all-modules-pass claim is made.
+
+The earlier failures are retained in the audit evidence. These contiguous reads
+do not qualify splice-junction detection, biological accuracy, paired-end or
+large-input streaming. The historical scope and limitations above remain useful;
+the earlier statement that native tools were untested is superseded by these
+observed runs.

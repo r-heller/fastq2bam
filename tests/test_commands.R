@@ -21,6 +21,42 @@ stopifnot(!.hisat_index_complete(prefix))
 unlink(scratch, recursive=TRUE)
 cat("Command quoting, failure retention and complete-index checks passed.\n")
 
+# Exercise link cleanup and working-directory restoration without requiring HISAT2.
+# The integration workflow separately checks the actual wrapper and aligner.
+local({
+  root <- tempfile("alignment's input "); dir.create(root)
+  on.exit(unlink(root, recursive = TRUE))
+  alignment <- file.path(root, "output's directory"); dir.create(alignment)
+  prefix <- file.path(root, "reference's index")
+  for (i in 1:8) writeLines("index fixture", paste0(prefix, ".", i, ".ht2l"))
+  # A partial small index must not override a complete large index.
+  file.create(paste0(prefix, ".", 1:8, ".ht2"))
+  reads <- file.path(root, "sample's reads.fastq.gz")
+  writeLines("read fixture", reads)
+  before <- tools::md5sum(c(reads, paste0(prefix, ".", 1:8, ".ht2l")))
+  original_wd <- getwd()
+  original_tool <- .run_tool
+  on.exit(assign(".run_tool", original_tool, envir = .GlobalEnv), add = TRUE)
+  for (fail in c(FALSE, TRUE)) {
+    assign(".run_tool", function(command, args, ...) {
+      stopifnot(command == "hisat2", !any(grepl("[' ]", args)),
+                identical(readLines("reads.fastq.gz"), "read fixture"),
+                .hisat_index_complete("index"),
+                "--no-spliced-alignment" %in% args)
+      writeLines("retained SAM fixture", "output/aligned.sam")
+      if (fail) stop("simulated aligner failure")
+      invisible(0L)
+    }, envir = .GlobalEnv)
+    result <- try(.align_hisat2(prefix, reads, alignment, 1L, "dna"), silent = TRUE)
+    stopifnot(inherits(result, "try-error") == fail,
+              identical(getwd(), original_wd),
+              identical(tools::md5sum(names(before)), before),
+              identical(readLines(file.path(alignment, "aligned.sam")), "retained SAM fixture"),
+              !length(list.files(alignment, pattern = "^hisat-paths-")))
+  }
+})
+cat("HISAT2 relative paths, large index selection and failure cleanup passed.\n")
+
 new <- tempfile("new-output-")
 stopifnot(identical(.require_fresh_directory(new), new))
 dir.create(new)

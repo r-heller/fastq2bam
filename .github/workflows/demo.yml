@@ -18,7 +18,7 @@ jobs:
       - name: Install alignment system libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y libcurl4-openssl-dev libssl-dev libbz2-dev liblzma-dev zlib1g-dev
+          sudo apt-get install -y libcurl4-openssl-dev libssl-dev libbz2-dev liblzma-dev zlib1g-dev hisat2 samtools fastqc poppler-utils
       - name: Dependencies
         shell: Rscript {0}
         run: |
@@ -30,7 +30,28 @@ jobs:
           if (length(missing)) stop("Missing alignment dependencies: ", paste(missing, collapse=", "))
       - run: Rscript --vanilla tests/test_commands.R
       - run: Rscript --vanilla tests/test_demo.R
+      - run: Rscript --vanilla tests/test_quality_report.R
       - run: Rscript --vanilla 00_fastq_to_bam_pipeline.R
+      - name: Verify native HISAT2, samtools and FastQC paths
+        run: |
+          hisat2 --version
+          hisat2-build --version
+          samtools --version
+          fastqc --version
+          for type in dna rna; do
+            FASTQ2BAM_ALIGNER=hisat2 FASTQ2BAM_TYPE="$type" \
+              FASTQ2BAM_RUN_DIR="results/hisat2-${type} quoted's run" \
+              Rscript --vanilla 00_fastq_to_bam_pipeline.R
+          done
+      - name: Reject rendered plotting errors
+        run: |
+          while IFS= read -r -d '' report; do
+            pdftotext "$report" report-text.txt
+            if grep -E "Error using packet|breaks.*not unique" report-text.txt; then
+              echo "Plotting error in $report"
+              exit 1
+            fi
+          done < <(find results -type f -name '*.pdf' -print0)
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:

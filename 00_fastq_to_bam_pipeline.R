@@ -203,6 +203,15 @@ library(ggplot2)
 BiocParallel::register(BiocParallel::SerialParam())
 qa_result <- qa(fastq_files[1], type = "fastq")
 report(qa_result, dest = PATHS$qc)
+constant_quality_plot <- .constant_count_quality_plot(qa_result)
+if (!is.null(constant_quality_plot)) {
+  ggsave(file.path(PATHS$qc, "image", "perCycleQuality.pdf"),
+         constant_quality_plot, width = 7.5, height = 7.5)
+  ggsave(file.path(PATHS$qc, "image", "perCycleQuality.jpg"),
+         constant_quality_plot, width = 7.5, height = 7.5, dpi = 100)
+  .update_constant_quality_caption(PATHS$qc)
+  message("ShortRead-Farbskala bei gleichen Häufigkeiten: vollständige Qualitätszählungen als Punkte dargestellt.")
+}
 message("ShortRead QC-Report: ", PATHS$qc)
 
 # --- 4b: Qualitaet pro Zyklus plotten ---------------------------------------
@@ -247,7 +256,7 @@ message("Plot gespeichert: gc_content.pdf")
 
 # --- 4d: FastQC (wenn verfuegbar) -------------------------------------------
 if (has_fastqc) {
-  .run_tool("fastqc", c(fastq_files[1], "-o", PATHS$qc, "-t", THREADS))
+  .run_tool("fastqc", c(fastq_files[1], "--outdir", PATHS$qc, "-t", THREADS))
   message("FastQC-Report erstellt.")
 }
 
@@ -306,17 +315,9 @@ if (!use_rsubread) {
   message("Aligner: HISAT2")
   summary_file <- file.path(PATHS$alignment, "hisat2_summary.txt")
 
-  hisat2_args <- c(
-    "-x", index_prefix,
-    "-U", fastq_files[1],
-    "-S", sam_file,
-    "--threads", THREADS,
-    "--summary-file", summary_file
-  )
-
-  if (ALIGNMENT_TYPE == "dna") hisat2_args <- c(hisat2_args, "--no-spliced-alignment")
   t0 <- Sys.time()
-  exit_code <- .run_tool("hisat2", hisat2_args)
+  exit_code <- .align_hisat2(index_prefix, fastq_files[1], PATHS$alignment,
+                           THREADS, ALIGNMENT_TYPE)
   .require_output(sam_file)
   dt <- difftime(Sys.time(), t0, units = "secs")
 
